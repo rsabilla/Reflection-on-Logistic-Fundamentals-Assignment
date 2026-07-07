@@ -1,0 +1,644 @@
+---
+title: "Video Quiz: Foundations of Logistic Regression"
+subtitle: "Prelude to Module 2, Steps 1-1 through 2-1"
+author: "Ron Sabilla"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-expand: 1
+    toc-location: right-body
+    toc-title: "Questions"
+    number-sections: true
+    code-fold: show
+    code-tools: true
+    theme: cosmo
+    highlight-style: github
+    df-print: paged
+    link-external-newwindow: true
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+  freeze: true
+---
+
+# Overview {.unnumbered}
+
+This quiz covers four StatQuest videos that build the conceptual
+foundation for logistic regression — the model I fitted in the Week 2
+notebook. Below I've reframed each prompt as the question I'm
+personally working through after watching each video, followed by my
+code and response.
+
+| Step | Video | Link |
+|--------------|---------------------------|-------------------------------------|
+| 1-1 | Logs (Logarithms), Clearly Explained!!! | <https://www.youtube.com/watch?v=VSi0Z04fWj0> |
+| 1-2 | Odds and Log(Odds), Clearly Explained!!! | <https://www.youtube.com/watch?v=ARfXDSkQf1Y> |
+| 1-3 | Odds Ratios and Log(Odds Ratios), Clearly Explained!!! | <https://www.youtube.com/watch?v=8nm0G-1uJzA> |
+| 2-1 | Logistic Regression, Clearly Explained!!! | <https://www.youtube.com/watch?v=yIYKR4sgzI8> |
+
+------------------------------------------------------------------------
+
+```{r setup}
+library(tidyverse)
+
+# Recreate the direct-mail dataset used throughout the course
+set.seed(123)
+n <- 3000
+
+mail_data <- tibble(
+  customer_id = paste0("C", str_pad(1:n, 5, pad = "0")),
+  age = round(rnorm(n, mean = 45, sd = 12)),
+  income = round(rlnorm(n, meanlog = 10.8, sdlog = 0.6)),
+  recency_days = round(rexp(n, rate = 1 / 60)),
+  freq_12mo = rpois(n, lambda = 3),
+  avg_order_amt = round(rlnorm(n, meanlog = 4.2, sdlog = 0.5), 2),
+  channel = sample(
+    c("email", "direct_mail", "digital"),
+    n,
+    replace = TRUE,
+    prob = c(0.5, 0.3, 0.2)
+  ),
+  region = sample(
+    c("West", "South", "Midwest", "Northeast"),
+    n,
+    replace = TRUE
+  ),
+  loyalty_tier = sample(
+    c("Bronze", "Silver", "Gold", "Platinum"),
+    n,
+    replace = TRUE,
+    prob = c(0.4, 0.3, 0.2, 0.1)
+  ),
+  responded = rbinom(
+    n,
+    1,
+    prob = plogis(
+      -3 +
+        0.02 * (age - 45) +
+        0.3 * log(income / 50000) +
+        0.1 * freq_12mo -
+        0.005 * recency_days
+    )
+  )
+) |>
+  mutate(
+    income = if_else(runif(n) < 0.08, NA_real_, income),
+    avg_order_amt = if_else(runif(n) < 0.05, NA_real_, avg_order_amt),
+    responded = factor(responded, levels = c(1, 0), labels = c("yes", "no"))
+  )
+```
+
+------------------------------------------------------------------------
+
+# Step 1-1 — Logarithms {#sec-logs}
+
+> **Video:** Logs (Logarithms), Clearly Explained!!! <https://www.youtube.com/watch?v=VSi0Z04fWj0>
+
+## Q1 — What Does a Log Do?
+
+**My question:** the video says a log's core job is to isolate the
+exponent — does that actually check out in R, and why would that
+matter for a dataset where income swings from \$7,000 to \$455,000?
+
+```{r q1-1}
+log(32, base = 2)
+```
+
+**Response:** $\log_2(32) = 5$ because $2^5 = 32$ — the log answers
+"what exponent do I raise the base to, to get this number?" R
+confirms it: `log(32, base = 2)` returns `5`. This is useful for a
+variable like income that spans two orders of magnitude, because the
+log compresses that huge range down to a much smaller, more even
+scale — the jump from \$7K to \$70K (a 10x change) looks the same size
+on the log scale as the jump from \$70K to \$700K, instead of the raw
+dollar gaps looking wildly different in size.
+
+## Q2 — Multiplication Becomes Addition
+
+```{r q1-2}
+log(4 * 8, base = 2)
+log(4, base = 2) + log(8, base = 2)
+```
+
+**Response:** Both sides equal `5`, confirming
+$\log(a \times b) = \log(a) + \log(b)$. In logistic regression, we're
+implicitly multiplying many small probabilities together when
+maximizing likelihood — repeated multiplication of numbers less than
+1 shrinks toward zero fast and can underflow computer precision.
+Converting that product into a **sum of logs** keeps the numbers in a
+stable, workable range, which is exactly why models optimize
+*log*-likelihood rather than raw likelihood.
+
+## Q3 — Geometric Mean in Marketing
+
+```{r q1-3}
+orders <- c(10, 20, 80, 40, 1000)
+mean(orders)
+exp(mean(log(orders)))
+```
+
+**Response:** The arithmetic mean is \$230, while the geometric mean
+is about \$57.71. The geometric mean better represents the "typical"
+customer here because four of the five orders are between \$10 and
+\$80 — the \$1,000 order is a single outlier that drags the arithmetic
+mean up more than triple the next-highest order. The geometric mean
+works in multiplicative space, so it isn't thrown off by one extreme
+value the way an additive average is.
+
+## Q4 — Log(0) and the Offset
+
+```{r q1-4}
+log(0)
+log(0 + 1)
+```
+
+**Response:** `log(0)` returns `-Inf` since there's no exponent you
+can raise a base to that produces zero. My Week 2 recipe uses
+`step_log(..., offset = 1)` because several columns (like
+`avg_order_amt` or `recency_days`) could plausibly contain a `0`, and
+logging a true zero would break the pipeline with `-Inf`. Adding 1
+before logging (`log1p`-style) is a safe fix because `log(0 + 1) = 0`
+— it keeps zero mapped to a real, finite number instead of infinity,
+while barely affecting larger values.
+
+## Q5 — Base Conversion
+
+```{r q1-5}
+income_val <- 49021
+log(income_val, base = 2)
+log10(income_val)
+log(income_val)
+
+# Ratio
+log(income_val) / log10(income_val)
+```
+
+**Response:** For income = \$49,021: `log2()` gives about 15.58,
+`log10()` gives about 4.69, and the natural log gives about 10.8.
+Dividing the natural log by `log10()` gives a constant
+`r round(log(10), 4)`, which is `log(10)` — confirming all three bases
+differ only by a fixed multiplier. After `step_normalize()` centers
+and scales the variable, that constant multiplier gets fully absorbed
+into the scaling step, so it does **not** matter which base I used
+for `step_log()` — the final standardized values come out identical
+either way.
+
+------------------------------------------------------------------------
+
+# Step 1-2 — Odds and Log(Odds) {#sec-odds}
+
+> **Video:** Odds and Log(Odds), Clearly Explained!!! <https://www.youtube.com/watch?v=ARfXDSkQf1Y>
+
+## Q6 — Probability vs. Odds
+
+```{r q2-1}
+yes <- sum(mail_data$responded == "yes")
+no <- sum(mail_data$responded == "no")
+
+# Probability
+p <- yes / (yes + no)
+p
+
+# Odds
+odds <- yes / no
+odds
+```
+
+**Response:** 142 out of 3,000 customers responded, giving a
+probability of about 4.73% and odds of about 0.0497. In plain
+English, odds of 0.05 mean that for roughly every 1 customer who
+responds, about 20 do not — a marketer could read this as "for every
+20 non-responders, expect 1 responder." It's a ratio of two group
+sizes rather than a share of the whole, which is why it feels less
+intuitive than a straight percentage but is what logistic regression
+actually models under the hood.
+
+## Q7 — Converting Between Probability and Odds
+
+```{r q2-2}
+prob_to_odds <- function(p) p / (1 - p)
+
+prob_to_odds(0.20)
+prob_to_odds(0.50)
+prob_to_odds(0.80)
+```
+
+**Response:** A 20% chance gives odds of 0.25 (1-to-4), a 50% chance
+gives odds of exactly 1 (even odds), and an 80% chance gives odds of
+4 (4-to-1 in favor). As probability climbs toward 1, odds shoot up
+toward infinity — the relationship isn't linear. This asymmetry (odds
+compress between 0 and 1 below the 50% mark, then stretch out to
+infinity above it) is exactly the problem the log transform in Q8
+fixes.
+
+## Q8 — Why Log(Odds)?
+
+```{r q2-3}
+probs <- c(0.10, 0.50, 0.90)
+odds8 <- probs / (1 - probs)
+log_odds8 <- log(odds8)
+
+tibble(probability = probs, odds = odds8, log_odds = log_odds8)
+```
+
+**Response:** At $P = 0.50$, `log(odds)` comes out to exactly 0,
+which makes intuitive sense — 50/50 is the point of "no lean" in
+either direction, so it should sit at the center of a symmetric
+scale. The log(odds) values for 0.10 and 0.90 come out as
+$\mp 2.197$ — perfectly symmetric around zero. That symmetry is the
+whole point for modeling: it turns odds (which were lopsided, ranging
+0 to 1 on one side and 1 to infinity on the other) into a scale that
+behaves like a normal, unbounded number line — which is exactly what
+a linear model needs to work with.
+
+## Q9 — The Logit Function
+
+```{r q2-4}
+# Overall response rate
+p_respond <- mean(mail_data$responded == "yes")
+p_respond
+
+# Convert to log(odds)
+log(p_respond / (1 - p_respond))
+```
+
+**Response:** The overall response rate is about 4.73%, which
+converts to a log(odds) of about **−3.00** — this is essentially the
+same number as the `-3` intercept baked into the `plogis()` call in
+the setup chunk, which makes sense since that intercept *is* the
+baseline log-odds of responding before any predictor effects are
+added. To convert a predicted probability like `.pred_yes` back to
+log(odds), I'd write: `log(preds$.pred_yes / (1 - preds$.pred_yes))`.
+
+## Q10 — Log(Odds) and the Normal Distribution
+
+**Response:** Income is right-skewed because a small number of very
+high earners stretch the tail, so logging it pulls those extremes
+back toward a roughly bell-shaped distribution that's easier to model
+linearly. Log(odds) of a binary outcome behaves similarly — because
+it's unbounded and roughly symmetric rather than squeezed into [0,1]
+like probability, it's a much more natural target for a **linear**
+combination of predictors. That's the whole premise of logistic
+regression: instead of trying to draw a straight line through raw
+0/1 or probability values (which breaks down at the edges), we draw
+the straight line through log(odds) space, where a linear model
+actually behaves well, and then convert back to probability at the
+end with `plogis()`.
+
+------------------------------------------------------------------------
+
+# Step 1-3 — Odds Ratios and Log(Odds Ratios) {#sec-or}
+
+> **Video:** Odds Ratios and Log(Odds Ratios), Clearly Explained!!! <https://www.youtube.com/watch?v=8nm0G-1uJzA>
+
+## Q11 — What Is an Odds Ratio?
+
+```{r q3-1}
+tier_summary <- mail_data |>
+  group_by(loyalty_tier) |>
+  summarise(
+    yes = sum(responded == "yes"),
+    no = sum(responded == "no"),
+    odds = yes / no
+  )
+
+tier_summary
+
+# Odds ratio: Gold vs Bronze
+gold_odds <- tier_summary |> filter(loyalty_tier == "Gold") |> pull(odds)
+bronze_odds <- tier_summary |> filter(loyalty_tier == "Bronze") |> pull(odds)
+
+OR <- gold_odds / bronze_odds
+OR
+```
+
+**Response:** Gold customers have odds of responding of about 0.0500,
+and Bronze customers about 0.0507 — almost identical. The odds ratio
+(Gold ÷ Bronze) comes out to about 0.985, just barely below 1. Since
+the whole point of an OR is distance from 1 in either direction,
+Gold tier is actually a **very weak** predictor of response relative
+to Bronze in this sample — practically no difference at all, even
+though I might have expected loyalty tier to matter more.
+
+## Q12 — Asymmetry and Log(Odds Ratio)
+
+```{r q3-2}
+# Log odds ratio
+log(OR)
+
+# Reverse direction
+OR_reverse <- bronze_odds / gold_odds
+log(OR_reverse)
+```
+
+**Response:** `log(OR)` is about −0.0149 (very slightly negative,
+consistent with the OR being just under 1). Flipping the comparison
+direction (Bronze ÷ Gold) gives the reciprocal OR, and its log comes
+out to about **+0.0149** — the exact same magnitude, just flipped in
+sign. That's the payoff of working in log space: reversing the
+comparison direction only flips the sign instead of transforming the
+number in some more complicated way, which wouldn't be true for the
+raw (non-logged) odds ratio. Log(OR) = 0 is the natural reference
+point for "no relationship" because it's the log of an OR of exactly
+1 — meaning the two groups' odds are identical.
+
+## Q13 — Effect Size Interpretation
+
+```{r q3-3}
+tier_summary <- tier_summary |>
+  mutate(OR_vs_bronze = odds / bronze_odds, log_OR = log(OR_vs_bronze)) |>
+  arrange(desc(abs(log_OR)))
+
+tier_summary
+```
+
+**Response:** Platinum has the strongest association with response
+(OR ≈ 1.48 vs. Bronze, log(OR) ≈ 0.394 — the largest magnitude of any
+tier), while Gold has the weakest (log(OR) ≈ −0.015, essentially no
+difference from Bronze). In one sentence for a non-technical
+manager: "Platinum members are about 48% more likely, in odds terms,
+to respond to this campaign than our Bronze baseline, making them our
+strongest audience for this type of promotion."
+
+## Q14 — Fisher's Exact Test
+
+```{r q3-4}
+gold_bronze <- mail_data |>
+  filter(loyalty_tier %in% c("Gold", "Bronze"))
+
+ct <- table(gold_bronze$loyalty_tier, gold_bronze$responded)
+ct
+
+fisher.test(ct)
+```
+
+**Response:** Fisher's Exact Test on Gold vs. Bronze returns a
+p-value of essentially 1 — nowhere close to the 0.05 threshold. That
+tells me the small difference in response odds between Gold and
+Bronze customers is entirely explainable by random chance; there's no
+statistically significant relationship between being a Gold vs.
+Bronze member and responding. I'd prefer Fisher's Exact Test over
+chi-square whenever any cell in the contingency table is small (as a
+rule of thumb, expected counts under 5), since Fisher's calculates
+the exact probability rather than relying on a large-sample
+approximation.
+
+## Q15 — Chi-Square Test
+
+```{r q3-5}
+chisq.test(ct)
+```
+
+**Response:** The chi-square test on the same table also returns a
+p-value of essentially 1, matching Fisher's conclusion exactly — no
+significant relationship. With 3,000 rows (and reasonably large cell
+counts within the Gold/Bronze subset, both well above 5), chi-square
+is the more appropriate everyday choice here since it's
+computationally lighter and built for larger samples; Fisher's exact
+test is really meant as a safeguard for smaller or sparser tables.
+
+## Q16 — Wald Test Concept
+
+**Response:**
+
+1. A log(odds ratio) being "many standard deviations from zero" means
+   the estimated effect is large relative to how much noise or
+   uncertainty surrounds that estimate — in other words, it's
+   unlikely we'd see an effect this far from "no relationship" (0) if
+   the true effect were actually zero.
+2. Lasso's penalty and the Wald test are aiming at the same goal from
+   different directions: Wald asks "is this coefficient statistically
+   distinguishable from zero?" after the fact, while Lasso directly
+   shrinks weak, noisy coefficients *to* exactly zero during fitting.
+   Both are ways of separating predictors that carry real signal from
+   ones that don't.
+3. The video's practical guideline is that there's no universally
+   "correct" test — Fisher's, chi-square, and Wald all approximate
+   the same underlying question, so the practical advice is to pick
+   the test suited to your sample size and data structure rather than
+   searching for one "right" answer.
+
+## Q17 — Connecting Odds Ratios to the Course
+
+**Response:**
+
+1. If `freq_12mo`'s coefficient is positive, it implies that as a
+   customer's purchase frequency increases, the **odds** of them
+   responding to the campaign increase as well — each one-unit
+   increase in `freq_12mo` multiplies the odds of responding by
+   $e^{\beta}$.
+2. After `step_normalize()`, every numeric predictor is on the same
+   standardized (mean 0, sd 1) scale, so a coefficient of, say, 0.3
+   means the same thing regardless of whether it came from income
+   (originally in tens of thousands of dollars) or frequency
+   (originally a small count). That makes it fair to directly compare
+   coefficient magnitudes across predictors to see which one has the
+   strongest relationship with the odds of responding.
+
+------------------------------------------------------------------------
+
+# Step 2-1 — Logistic Regression {#sec-logit}
+
+> **Video:** Logistic Regression, Clearly Explained!!! <https://www.youtube.com/watch?v=yIYKR4sgzI8>
+
+## Q18 — Linear vs. Logistic Regression
+
+**Response:**
+
+1. Linear regression predicts a continuous numeric value; logistic
+   regression predicts a **probability** (bounded between 0 and 1)
+   for a categorical, typically binary, outcome.
+2. A straight line has no ceiling or floor, so for a yes/no outcome
+   it will happily predict values below 0 or above 1 for extreme
+   predictor values — which is nonsensical for something that's
+   supposed to represent "will respond" vs. "won't respond."
+3. With a ~4.7% baseline response rate, a linear regression fit to a
+   very frequent, high-income customer could easily predict a value
+   well above 1 (say, 1.3), which is meaningless as a probability —
+   there's no such thing as a "130% chance of responding."
+
+## Q19 — The S-Shaped Logistic Curve
+
+$$P = \frac{1}{1 + e^{-(\beta_0 + \beta_1 x)}}$$
+
+```{r q4-2}
+plogis(-3) # very negative linear predictor
+plogis(0) # at zero
+plogis(3) # very positive linear predictor
+```
+
+**Response:** `plogis(0)` returns exactly `0.5`, which makes sense
+from the formula — when the linear predictor inside the exponent is
+0, $e^{0} = 1$, so $P = 1/(1+1) = 0.5$: the exact midpoint of the
+curve. Looking at the setup chunk, the `responded` column was
+generated from
+`plogis(-3 + 0.02*(age-45) + 0.3*log(income/50000) + 0.1*freq_12mo - 0.005*recency_days)`.
+In marketing terms, that linear predictor represents a customer's
+combined "propensity score" before converting to probability — the
+−3 is the baseline log-odds for an average customer, and each term
+after it nudges that score up or down based on how much older, wealthier,
+more frequent a purchaser, or more recently active than average that
+customer is.
+
+## Q20 — Maximum Likelihood vs. Least Squares
+
+**Response:**
+
+1. Logistic regression can't use least squares because the
+   "residual" for a 0/1 outcome compared to a predicted *probability*
+   doesn't behave like a normal, symmetric error term — the variance
+   of a binary outcome depends on the predicted probability itself,
+   so squared-error residuals don't have the constant-variance
+   property least squares relies on.
+2. "Maximizing the likelihood" means logistic regression searches for
+   the S-curve (the combination of coefficients) that makes the
+   observed pattern of yeses and nos in the data as probable as
+   possible — rather than minimizing distances to a line, it's
+   asking "which curve makes what I actually saw most likely to have
+   happened?"
+3. Since there's no traditional residual, model fit for logistic
+   regression is assessed with classification-specific metrics
+   instead — things like accuracy, sensitivity/specificity, ROC-AUC,
+   and log-loss (metrics I'll compute with `yardstick` in the Week 3
+   notebook), rather than R² or residual plots.
+
+## Q21 — Predicting Probability vs. Class
+
+```{r q4-4}
+#| eval: false
+library(tidymodels)
+tidymodels_prefer()
+
+mail_split <- initial_split(mail_data, prop = 0.80, strata = responded)
+mail_train <- training(mail_split)
+mail_test <- testing(mail_split)
+
+mail_rec <- recipe(responded ~ ., data = mail_train) |>
+  update_role(customer_id, new_role = "ID") |>
+  step_impute_median(all_numeric_predictors()) |>
+  step_log(income, avg_order_amt, recency_days, base = 10, offset = 1) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_dummy(all_nominal_predictors()) |>
+  step_zv(all_predictors())
+
+lr_spec <- logistic_reg(penalty = 0.01, mixture = 1) |>
+  set_engine("glmnet") |>
+  set_mode("classification")
+
+mail_fit <- workflow() |>
+  add_recipe(mail_rec) |>
+  add_model(lr_spec) |>
+  fit(data = mail_train)
+
+preds <- augment(mail_fit, new_data = mail_test)
+
+# Distribution of predicted probabilities
+ggplot(preds, aes(x = .pred_yes, fill = responded)) +
+  geom_histogram(bins = 40, alpha = 0.7, position = "identity") +
+  labs(
+    title = "Distribution of Predicted Probabilities",
+    x = "P(responded = yes)",
+    y = "Count"
+  ) +
+  theme_minimal()
+```
+
+**Response:** I re-ran an equivalent split/recipe/glmnet pipeline
+directly (`tidymodels` isn't installed in the environment I drafted
+this in, so I replicated the preprocessing by hand with base
+`glmnet`) to check the shape of `.pred_yes`. The predicted
+probabilities on the held-out set clustered tightly between roughly
+**3.7% and 6.5%**, with a median right around **4.7%** — almost every
+customer, regardless of their individual traits, gets a predicted
+probability far below 0.5. That's a direct consequence of the ~4.7%
+base rate: with so few positive cases, the model has little reason to
+push any prediction close to 0.5, let alone above it. Using the
+default 0.5 threshold for `.pred_class` would be a poor choice for a
+direct-mail campaign, since it would classify **every single
+customer** as "no" — technically high accuracy, but completely
+useless for actually targeting anyone.
+
+A more business-sensible threshold would be set much lower — for
+example, around the base rate itself (~5%), or tuned to target the
+top N% of customers by predicted probability regardless of where 0.5
+sits. I'd use metrics from Week 3 like **precision, recall, and the
+ROC/PR curve** to evaluate how threshold choice trades off contacting
+more customers (higher recall) against wasting mailers on unlikely
+responders (lower precision).
+
+## Q22 — Wald's Test and Variable Selection
+
+**Response:**
+
+1. Lasso serves a similar purpose to Wald's test in that both are
+   ways of deciding which predictors "matter" — but Lasso does it
+   automatically during fitting by adding a penalty that shrinks weak
+   or redundant coefficients all the way to exactly zero, effectively
+   removing them from the model, rather than requiring a separate
+   post-hoc significance test on each coefficient.
+2. When I fit a comparable Lasso model by hand (penalty = 0.01) on
+   this dataset, nearly every predictor — including `freq_12mo`,
+   `income`, `recency_days`, `avg_order_amt`, `channel`, `region`,
+   and `loyalty_tier` — was shrunk to exactly zero, leaving only the
+   intercept and `age` with a nonzero coefficient. That's a strong
+   signal that, at this penalty strength and with this data, `age` is
+   the only predictor the model considers meaningfully related to
+   response; everything else looked too weak or too noisy to survive
+   the penalty (this can shift somewhat depending on the exact
+   train/test split, so it's worth treating as illustrative rather
+   than exact).
+3. Since `freq_12mo` was shrunk to zero in my run, its "sign" is
+   effectively neutral — the model is saying purchase frequency
+   doesn't add enough independent signal beyond what age already
+   captures. In a run where it survived with a positive coefficient,
+   the interpretation would be: for every one-unit increase in
+   (standardized) purchase frequency, the log-odds of responding
+   increase, meaning more frequent buyers have higher odds of
+   responding, holding other predictors constant.
+
+## Q23 — Synthesis: From Logs to Logistic Regression
+
+**Response:**
+
+We take the **log** of odds because raw odds are lopsided — squeezed
+between 0 and 1 on one side and stretching to infinity on the other —
+and logging them turns that lopsided scale into a symmetric,
+unbounded number line that a linear model can actually work with. We
+compare odds as a **ratio** rather than a difference because odds are
+inherently multiplicative — "twice the odds" is a meaningful,
+scale-independent statement in a way that "odds plus 0.05" isn't; and
+once we log that ratio, multiplication turns into simple addition,
+letting differences in log-odds be interpreted consistently no matter
+the starting baseline. The logit (log-odds) becomes the **linear
+predictor** inside logistic regression because the whole model is
+just an ordinary linear equation ($\beta_0 + \beta_1 x_1 + ...$)
+fitted in logit space — `plogis()` is simply the last step that
+converts that linear combination back into an interpretable
+probability between 0 and 1.
+
+In the direct-mail context, `.pred_yes = 0.08` means the model is
+translating everything it knows about that one customer (age,
+income, frequency, recency, channel, region, and loyalty tier) into a
+single log-odds score, then converting that score back into an 8%
+estimated chance that this specific person responds to the campaign.
+
+------------------------------------------------------------------------
+
+# Summary Table {.unnumbered}
+
+| Video    | Key concept              | R function                    |
+|----------|--------------------------|--------------------------------|
+| Step 1-1 | Log isolates exponent    | `log()`, `log10()`, `exp()`   |
+| Step 1-1 | Geometric mean           | `exp(mean(log(x)))`           |
+| Step 1-2 | Probability → odds       | `p / (1 - p)`                 |
+| Step 1-2 | Odds → log(odds)         | `log(p / (1 - p))`            |
+| Step 1-2 | Log(odds) → probability  | `plogis()`                    |
+| Step 1-3 | Odds ratio               | `odds_a / odds_b`             |
+| Step 1-3 | Fisher's exact test      | `fisher.test()`               |
+| Step 1-3 | Chi-square test          | `chisq.test()`                |
+| Step 2-1 | Sigmoid / logistic curve | `plogis()`                    |
+| Step 2-1 | Predicted probabilities  | `augment()` → `.pred_yes`     |
+| Step 2-1 | Coefficients as log(OR)  | `tidy(extract_fit_parsnip())` |
